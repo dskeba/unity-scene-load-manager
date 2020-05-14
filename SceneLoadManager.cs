@@ -1,23 +1,59 @@
-﻿using System.Collections;
-using System.Collections.Generic;
+﻿using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
+
+public enum LoadScreenBehvavior
+{
+    None,
+    AnyKey,
+    SpecificKey,
+    WaitSeconds
+}
+
+public struct LoadScreenOptions
+{
+    public LoadScreenBehvavior LoadScreenBehvavior;
+    public KeyCode KeyCode;
+    public float Seconds;
+    public string LoadBarTag;
+
+    public LoadScreenOptions(LoadScreenBehvavior loadScreenBehavior)
+    {
+        LoadScreenBehvavior = loadScreenBehavior;
+        KeyCode = KeyCode.Space;
+        Seconds = 1f;
+        LoadBarTag = "LoadBar";
+    }
+}
+
 public class SceneLoadManager : Singleton<SceneLoadManager>
 {
-    private Image loadBar;
-
     public AsyncOperation ChangeScene(string currentSceneName, string nextSceneName)
     {
         SceneManager.UnloadSceneAsync(currentSceneName);
         return SceneManager.LoadSceneAsync(nextSceneName, LoadSceneMode.Additive);
     }
 
-    public void ChangeSceneWithLoadingScreen(string currentSceneName, string nextSceneName)
+    public void ChangeScene(string currentSceneName, string nextSceneName, Action preloadAction)
     {
         SceneManager.UnloadSceneAsync(currentSceneName);
-        StartCoroutine(AsyncLoadLoadingScreen(nextSceneName));
+        LoadScene(nextSceneName, preloadAction);
+    }
+
+    public void ChangeSceneWithLoadScreen(string currentSceneName, string nextSceneName)
+    {
+        LoadScreenOptions options = new LoadScreenOptions();
+        options.LoadScreenBehvavior = LoadScreenBehvavior.None;
+        ChangeSceneWithLoadScreen(currentSceneName, nextSceneName, () => { }, options);
+    }
+
+    public void ChangeSceneWithLoadScreen(string currentSceneName, string nextSceneName, Action preloadAction, LoadScreenOptions options)
+    {
+        SceneManager.UnloadSceneAsync(currentSceneName);
+        StartCoroutine(AsyncLoadLoadScreen(nextSceneName, preloadAction, options));
     }
 
     public AsyncOperation LoadScene(string sceneName)
@@ -25,9 +61,28 @@ public class SceneLoadManager : Singleton<SceneLoadManager>
         return SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive);
     }
 
-    public void LoadSceneWithLoadingScreen(string sceneName)
+    public void LoadScene(string sceneName, Action preloadAction)
     {
-        StartCoroutine(AsyncLoadLoadingScreen(sceneName));
+        AsyncOperation sceneLoadOperation = SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive);
+        sceneLoadOperation.allowSceneActivation = false;
+        while (sceneLoadOperation.progress < 0.9f) { }
+        preloadAction();
+        sceneLoadOperation.allowSceneActivation = true;
+    }
+
+    public void LoadSceneWithLoadScreen(string sceneName, LoadScreenOptions options)
+    {
+        StartCoroutine(AsyncLoadLoadScreen(sceneName, () => { }, options));
+    }
+
+    public void LoadSceneWithLoadScreen(string sceneName, Action preloadAction, LoadScreenOptions options)
+    {
+        StartCoroutine(AsyncLoadLoadScreen(sceneName, preloadAction, options));
+    }
+
+    public AsyncOperation UnloadScene(string sceneName)
+    {
+        return SceneManager.UnloadSceneAsync(sceneName);
     }
 
     public bool SetActiveScene(string sceneName)
@@ -36,35 +91,57 @@ public class SceneLoadManager : Singleton<SceneLoadManager>
         return SceneManager.SetActiveScene(scene);
     }
 
-    private IEnumerator AsyncLoadLoadingScreen(string nextSceneName)
+    private IEnumerator AsyncLoadLoadScreen(string nextSceneName, Action preloadAction, LoadScreenOptions options)
     {
         AsyncOperation sceneLoadOperation = SceneManager.LoadSceneAsync("Loading", LoadSceneMode.Additive);
         while (!sceneLoadOperation.isDone)
         {
             yield return new WaitForEndOfFrame();
         }
-        GetLoadingSceneObjects();
-        yield return AsyncLoadSceneWithLoadingScreen("Loading", nextSceneName);
+        yield return AsyncLoadSceneWithLoadScreen("Loading", nextSceneName, preloadAction, options);
     }
 
-    private void GetLoadingSceneObjects()
+    private IEnumerator AsyncLoadSceneWithLoadScreen(string currentSceneName, string nextSceneName, Action preloadAction, LoadScreenOptions options)
     {
         GameObject loadBarGameObject = GameObject.FindGameObjectsWithTag("LoadBar")[0];
-        loadBar = loadBarGameObject.GetComponent<Image>();
-    }
-
-    private IEnumerator AsyncLoadSceneWithLoadingScreen(string currentSceneName, string nextSceneName)
-    {
+        Image loadBar = loadBarGameObject.GetComponent<Image>();
         loadBar.fillAmount = 0;
         yield return new WaitForSeconds(1);
         AsyncOperation sceneLoadOperation = SceneManager.LoadSceneAsync(nextSceneName, LoadSceneMode.Additive);
         sceneLoadOperation.allowSceneActivation = false;
         while (sceneLoadOperation.progress < 0.9f)
         {
-            loadBar.fillAmount = sceneLoadOperation.progress;
+            loadBar.fillAmount = (sceneLoadOperation.progress + 0.1f) * 0.5f;
         }
-        loadBar.fillAmount = 1f;
         yield return new WaitForSeconds(1);
+        preloadAction();
+        loadBar.fillAmount = 1f;
+        if (options.LoadScreenBehvavior.Equals(LoadScreenBehvavior.WaitSeconds))
+        {
+            yield return new WaitForSeconds(options.Seconds);
+        }
+        else if (options.LoadScreenBehvavior.Equals(LoadScreenBehvavior.SpecificKey))
+        {
+            while (!sceneLoadOperation.isDone)
+            {
+                if (Input.GetKeyDown(options.KeyCode))
+                {
+                    break;
+                }
+                yield return null;
+            }
+        } 
+        else if (options.LoadScreenBehvavior.Equals(LoadScreenBehvavior.AnyKey))
+        {
+            while (!sceneLoadOperation.isDone)
+            {
+                if (Input.anyKeyDown)
+                {
+                    break;
+                }
+                yield return null;
+            }
+        }
         sceneLoadOperation.allowSceneActivation = true;
         SceneManager.UnloadSceneAsync(currentSceneName);
     }
